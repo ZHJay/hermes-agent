@@ -143,12 +143,37 @@ fn trusted_release_pubkey() -> anyhow::Result<&'static str> {
     ))
 }
 
+/// The canonical release source this updater was built for.
+///
+/// Embedded at compile time via `HERMES_RELEASE_SOURCE`. If absent at
+/// build time, falls back to the official GitHub releases URL. This is
+/// the "known good" origin — overriding it via `--source` produces a
+/// scary warning because the user is trusting a different origin for
+/// release artifacts.
+const EMBEDDED_RELEASE_SOURCE: &str = match option_env!("HERMES_RELEASE_SOURCE") {
+    Some(s) => s,
+    None => "https://github.com/NousResearch/hermes-agent/releases/download",
+};
+
 fn release_source(source: Option<String>) -> anyhow::Result<release::ReleaseSource> {
-    release::ReleaseSource::parse(
-        source
-            .as_deref()
-            .unwrap_or("https://github.com/NousResearch/hermes-agent/releases/download"),
-    )
+    let url = source.as_deref().unwrap_or(EMBEDDED_RELEASE_SOURCE);
+
+    // Warn loudly if the caller is trusting a different origin than the one
+    // this updater was built for. The signature still protects integrity,
+    // but a different origin means a different release pipeline — the user
+    // should know they've diverged from the default trust path.
+    if let Some(custom) = &source {
+        if custom != EMBEDDED_RELEASE_SOURCE {
+            eprintln!("⚠  WARNING: using a non-default release source: {custom}");
+            eprintln!("   This updater was built for: {EMBEDDED_RELEASE_SOURCE}");
+            eprintln!("   Release artifacts will be fetched from a different origin.");
+            eprintln!("   The manifest signature is still verified, but the release");
+            eprintln!("   pipeline (key, CI, provenance) may differ.");
+            eprintln!();
+        }
+    }
+
+    release::ReleaseSource::parse(url)
 }
 
 fn install(

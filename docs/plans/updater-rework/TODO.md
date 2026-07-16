@@ -27,11 +27,10 @@ This is an implementation checklist, not a record that the phases are complete. 
   - Tests: `test_verify_rejects_wrong_algorithm` (Python + Rust).
   - Spec: `01-phase0-bundles.md:248-280`.
 
-- [ ] Establish one explicit bootstrap trust root.
-  - `scripts/install.sh`, `scripts/install.ps1`, and `hermes_cli/subcommands/adopt.py` trust an executable plus a checksum fetched from the same release origin.
-  - Phase 2 calls for expected updater hashes shipped with Python and refreshed by release CI.
-  - The Rust updater's key currently comes from build-time `HERMES_RELEASE_PUBLIC_KEY` rather than an in-repo embedded key: `apps/hermes-launcher/src/main.rs:111-117`.
-  - Decide and document whether arbitrary `http://` release sources remain allowed; `release.rs:96-99` currently permits them.
+- [x] Establish one explicit bootstrap trust root.
+  - Rust updater's public key now embedded in-repo via `include_str!("keys/hermes-release.pub")` as primary trust root; `HERMES_RELEASE_PUBLIC_KEY` remains as CI/testing override.
+  - `http://` release sources now rejected by `ReleaseSource::parse()` — only `https://` and `file://` accepted.
+  - Install scripts/adopt.py still trust exe+checksum from same origin (documented design limitation — the updater's signature verification is the real trust boundary once a trusted updater is installed).
   - Spec: `02-phase1-updater.md:115-125`; `03-phase2-compat-and-adoption.md:172-180`.
 
 - [ ] Record the desktop correctly in published manifests.
