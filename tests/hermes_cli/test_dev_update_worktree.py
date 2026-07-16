@@ -404,10 +404,10 @@ class TestMergeInPlace:
 # ---------------------------------------------------------------------------
 
 class TestWorktreeCreationFailure:
-    """Worktree creation failure → falls back to legacy autostash."""
+    """Worktree creation failure fails closed."""
 
-    def test_falls_back_on_worktree_failure(self, dirty_repo, monkeypatch):
-        """When git worktree add fails, falls back to legacy autostash."""
+    def test_fails_on_worktree_failure(self, dirty_repo, monkeypatch):
+        """When git worktree add fails, report failure without mutation fallback."""
         # Monkeypatch _create_worktree to raise RuntimeError
         from hermes_cli import dev_update
 
@@ -425,10 +425,42 @@ class TestWorktreeCreationFailure:
             symlink_fn=lambda s, t: None,
         )
 
-        assert result.fell_back is True
         assert result.success is False
         assert len(result.errors) > 0
         assert "worktree" in result.errors[0].lower()
+
+    def test_provision_failure_does_not_activate_worktree(self, dirty_repo):
+        activated = []
+
+        def fail_sync(path):
+            raise RuntimeError("sync exploded")
+
+        result = run_dev_update(
+            dirty_repo,
+            "main",
+            choose="switch",
+            dev_sync_fn=fail_sync,
+            symlink_fn=lambda source, target: activated.append((source, target)),
+        )
+
+        assert result.success is False
+        assert result.errors == ["provisioning failed: sync exploded"]
+        assert activated == []
+
+    def test_symlink_failure_is_not_reported_as_success(self, dirty_repo):
+        def fail_symlink(source, target):
+            raise OSError("permission denied")
+
+        result = run_dev_update(
+            dirty_repo,
+            "main",
+            choose="switch",
+            dev_sync_fn=lambda path: None,
+            symlink_fn=fail_symlink,
+        )
+
+        assert result.success is False
+        assert result.errors == ["symlink activation failed: permission denied"]
 
 
 # ---------------------------------------------------------------------------

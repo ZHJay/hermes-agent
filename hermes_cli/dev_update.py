@@ -78,8 +78,6 @@ class WorktreeUpdateResult:
     ``success``: whether the operation completed without error.
     ``fast_forwarded``: True when the tree was clean and we fast-forwarded
         in place (no worktree created).
-    ``fell_back``: True when worktree creation failed and we fell back to
-        the legacy autostash flow.
     ``worktree_path``: path to the new worktree, if one was created.
     ``choice``: the :class:`UpdateChoice` the user made (or ``None`` for
         clean-tree fast-forward).
@@ -87,7 +85,6 @@ class WorktreeUpdateResult:
 
     success: bool = False
     fast_forwarded: bool = False
-    fell_back: bool = False
     worktree_path: Optional[Path] = None
     choice: Optional[UpdateChoice] = None
     errors: list[str] = field(default_factory=list)
@@ -231,13 +228,16 @@ def _provision_worktree(
         _BIN_HERMES_WIN if sys.platform == "win32" else _BIN_HERMES
     )
     if launcher.exists():
-        subprocess.run(
+        completed = subprocess.run(
             [str(launcher), "dev", "sync", "--dev"],
             cwd=str(worktree_path),
             capture_output=True,
             text=True,
             timeout=600,
         )
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "unknown error").strip()
+            raise RuntimeError(f"dev sync failed: {detail}")
     else:
         # Fallback: call dev_sync module directly
         from hermes_cli.dev_sync import run as dev_sync_run
@@ -416,9 +416,7 @@ def run_dev_update(
     Args:
         tree_root: Root of the source checkout.
         branch: The update target branch (e.g. ``"main"``).
-        in_place: If True, skip the worktree path entirely (caller should
-            fall through to the legacy flow — but this function handles
-            it by returning ``fell_back=True``).
+        in_place: If True, refuse the worktree path.
         choose: Pre-selected choice (``"switch"``, ``"merge"``,
                 ``"cancel"``).  If None, the user is prompted.
         input_fn: Optional callable for prompting (for testability).
@@ -444,8 +442,7 @@ def run_dev_update(
             result.fast_forwarded = True
             return result
         else:
-            print("⚠ Fast-forward failed — falling back to legacy autostash flow.")
-            result.fell_back = True
+            print("✗ Fast-forward failed.")
             result.errors.append("fast-forward failed")
             return result
 
@@ -494,9 +491,7 @@ def run_dev_update(
     try:
         wt_path = _create_worktree(tree_root, target_name, target_ref)
     except RuntimeError as exc:
-        print(f"⚠ Worktree creation failed: {exc}")
-        print("  Falling back to legacy autostash flow.")
-        result.fell_back = True
+        print(f"✗ Worktree creation failed: {exc}")
         result.errors.append(str(exc))
         return result
 
@@ -509,9 +504,11 @@ def run_dev_update(
     try:
         _provision_worktree(wt_path, dev_sync_fn=dev_sync_fn)
     except Exception as exc:
-        print(f"  ⚠ Provisioning failed: {exc}")
+        print(f"  ✗ Provisioning failed: {exc}")
         print("  The worktree was created but not fully provisioned.")
         print("  Run `hermes dev sync` inside the worktree to complete setup.")
+        result.errors.append(f"provisioning failed: {exc}")
+        return result
 
     # Re-point the PATH symlink
     launcher_path = wt_path / (
@@ -524,9 +521,11 @@ def run_dev_update(
             symlink_fn(symlink, launcher_path)
         else:
             _repoint_symlink(symlink, launcher_path)
-    except OSError as exc:
-        print(f"  ⚠ Failed to re-point symlink: {exc}")
+    except Exception as exc:
+        print(f"  ✗ Failed to re-point symlink: {exc}")
         print(f"  Manually: ln -sf {launcher_path} {symlink}")
+        result.errors.append(f"symlink activation failed: {exc}")
+        return result
 
     # Assert original tree's git status is byte-identical
     status_after = _git_porcelain_status(tree_root)
