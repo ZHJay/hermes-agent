@@ -1834,3 +1834,20 @@ text-* variant utilities. */ .btn-arc {
     opacity: 0.4;
   }
 }
+
+/* Blanket reduced-motion rule: kills all CSS transitions/animations globally
+   so visual state and DOM state are always synchronized. Without this, E2E
+   screenshots can capture overlays mid-fade (e.g. the connecting overlay still
+   visible on top of a boot-failure error). JS-driven animations (setTimeout
+   chains) are NOT affected by this — those need matchMedia checks in each
+   component. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

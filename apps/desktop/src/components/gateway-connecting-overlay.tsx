@@ -21,6 +21,14 @@ const PREVIEW_REPLAY_MS = 1100
 
 type Phase = 'live' | 'text-out' | 'overlay-out' | 'gone'
 
+function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
 // Dev affordance: a warm Cmd+R reconnects almost instantly, so the overlay
 // only flashes. Load with `?connecting=1` to force a looping preview.
 function forcedPreview(): boolean {
@@ -81,12 +89,19 @@ export function GatewayConnectingOverlay() {
     }
 
     if (gatewayState === 'open' && shownRef.current) {
-      setPhase('text-out')
+      // With reduced motion, skip the entire text-out → overlay-out → gone
+      // choreography (JS timers that CSS can't touch) and jump straight to gone.
+      setPhase(prefersReducedMotion() ? 'gone' : 'text-out')
     }
   }, [phase, previewing, gatewayState])
 
   // Advance the exit choreography: text-out -> overlay-out -> gone.
+  // Skipped entirely when reduced motion is active (phase jumps live → gone).
   useEffect(() => {
+    if (prefersReducedMotion()) {
+      return
+    }
+
     if (phase === 'text-out') {
       const id = window.setTimeout(() => setPhase('overlay-out'), TEXT_OUT_MS + POST_TEXT_HOLD_MS)
 

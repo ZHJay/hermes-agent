@@ -62,6 +62,13 @@ export function DecodeText({
       return
     }
 
+    // Reduced motion: skip the scramble decode loop entirely, render resolved.
+    if (typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setTail(tailText)
+
+      return
+    }
+
     let resolved = 0
     let hold = 0
 
