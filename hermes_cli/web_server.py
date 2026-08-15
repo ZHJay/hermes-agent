@@ -7114,9 +7114,10 @@ def _denormalize_config_from_web(config: Dict[str, Any]) -> Dict[str, Any]:
     stripped from the GET response.  The frontend only sees model as a flat
     string; the rest is preserved transparently.
 
-    Also handles ``model_context_length`` — writes it back into the model dict
-    as ``context_length``.  A value of 0 or absent means "auto-detect" (omitted
-    from the dict so get_model_context_length() uses its normal resolution).
+    When the flat ``model`` field is present, also folds the virtual
+    ``model_context_length`` field into that model dict.  ``update_config``
+    applies the virtual field again after merging so partial payloads and the
+    0 = auto-detect deletion sentinel work too.
     """
     config = dict(config)
     # Remove any _model_meta that might have leaked in (shouldn't happen
@@ -7195,8 +7196,50 @@ async def update_config(body: ConfigUpdate, profile: Optional[str] = None):
             # frontend can only overwrite what it explicitly sends.
             with _CONFIG_MUTATION_LOCK:
                 existing = read_raw_config()
+                has_context_override = "model_context_length" in body.config
+                context_override = 0
+                if has_context_override:
+                    raw_override = str(body.config["model_context_length"]).strip()
+                    if not re.fullmatch(r"[0-9]+", raw_override):
+                        raise HTTPException(
+                            status_code=422,
+                            detail="model_context_length must be a non-negative integer",
+                        )
+                    context_override = int(raw_override)
                 incoming = _denormalize_config_from_web(body.config)
-                save_config(_deep_merge(existing, incoming))
+                merged = _deep_merge(existing, incoming)
+
+                if has_context_override:
+                    model = merged.get("model")
+                    if context_override > 0 and isinstance(model, str) and model:
+                        model = {"default": model}
+                        merged["model"] = model
+                    if context_override > 0 and not isinstance(model, dict):
+                        raise HTTPException(
+                            status_code=422,
+                            detail="model_context_length requires a configured model",
+                        )
+                    if isinstance(model, dict):
+                        if context_override > 0:
+                            from agent.model_metadata import MINIMUM_CONTEXT_LENGTH
+
+                            provider = str(model.get("provider") or "").strip().lower()
+                            if (
+                                context_override < MINIMUM_CONTEXT_LENGTH
+                                and provider != "lmstudio"
+                            ):
+                                raise HTTPException(
+                                    status_code=422,
+                                    detail=(
+                                        "model_context_length must be 0 (auto-detect) or at least "
+                                        f"{MINIMUM_CONTEXT_LENGTH:,} tokens"
+                                    ),
+                                )
+                            model["context_length"] = context_override
+                        else:
+                            model.pop("context_length", None)
+
+                save_config(merged)
         return {"ok": True}
 
     try:

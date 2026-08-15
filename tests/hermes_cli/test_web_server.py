@@ -2856,6 +2856,135 @@ class TestModelContextLength:
         assert result["model"]["context_length"] == 100000
         assert "model_context_length" not in result  # virtual field removed
 
+    def test_put_partial_context_length_sets_override(self):
+        """A partial config PUT must persist the virtual context field."""
+        from fastapi.testclient import TestClient
+        from hermes_cli.config import load_config, save_config
+        from hermes_cli.web_server import app, _SESSION_HEADER_NAME, _SESSION_TOKEN
+
+        save_config({
+            "model": {
+                "default": "anthropic/claude-opus-4.6",
+                "provider": "openrouter",
+            }
+        })
+        client = TestClient(app)
+        client.headers[_SESSION_HEADER_NAME] = _SESSION_TOKEN
+
+        response = client.put(
+            "/api/config",
+            json={"config": {"model_context_length": 128000}},
+        )
+
+        assert response.status_code == 200
+        assert load_config()["model"]["context_length"] == 128000
+
+    @pytest.mark.parametrize("include_model", [False, True])
+    def test_put_zero_clears_override(self, include_model):
+        """Zero must clear pins from partial and full-form payloads."""
+        from fastapi.testclient import TestClient
+        from hermes_cli.config import load_config, save_config
+        from hermes_cli.web_server import app, _SESSION_HEADER_NAME, _SESSION_TOKEN
+
+        save_config({
+            "model": {
+                "default": "anthropic/claude-opus-4.6",
+                "provider": "openrouter",
+                "context_length": 128000,
+            }
+        })
+        client = TestClient(app)
+        client.headers[_SESSION_HEADER_NAME] = _SESSION_TOKEN
+
+        payload = {"model_context_length": 0}
+        if include_model:
+            payload["model"] = "anthropic/claude-opus-4.6"
+        response = client.put("/api/config", json={"config": payload})
+
+        assert response.status_code == 200
+        model = load_config()["model"]
+        assert "context_length" not in model
+        assert model["default"] == "anthropic/claude-opus-4.6"
+        assert model["provider"] == "openrouter"
+
+    def test_put_rejects_context_length_below_runtime_minimum(self):
+        """The config API must reject a pin the agent cannot start with."""
+        from fastapi.testclient import TestClient
+        from hermes_cli.config import load_config, save_config
+        from hermes_cli.web_server import app, _SESSION_HEADER_NAME, _SESSION_TOKEN
+
+        save_config({
+            "model": {
+                "default": "anthropic/claude-opus-4.6",
+                "provider": "openrouter",
+            }
+        })
+        client = TestClient(app)
+        client.headers[_SESSION_HEADER_NAME] = _SESSION_TOKEN
+
+        response = client.put(
+            "/api/config",
+            json={"config": {"model_context_length": 32000}},
+        )
+
+        assert response.status_code == 422
+        assert "64,000" in response.json()["detail"]
+        assert "context_length" not in load_config()["model"]
+
+    @pytest.mark.parametrize("invalid", ["many", -1, True, 1.5])
+    def test_put_rejects_invalid_context_length_without_clearing_pin(self, invalid):
+        """Malformed input must not be coerced to the zero/clear sentinel."""
+        from fastapi.testclient import TestClient
+        from hermes_cli.config import load_config, save_config
+        from hermes_cli.web_server import app, _SESSION_HEADER_NAME, _SESSION_TOKEN
+
+        save_config({
+            "model": {
+                "default": "anthropic/claude-opus-4.6",
+                "provider": "openrouter",
+                "context_length": 128000,
+            }
+        })
+        client = TestClient(app)
+        client.headers[_SESSION_HEADER_NAME] = _SESSION_TOKEN
+
+        response = client.put(
+            "/api/config",
+            json={"config": {"model_context_length": invalid}},
+        )
+
+        assert response.status_code == 422
+        assert load_config()["model"]["context_length"] == 128000
+
+    @pytest.mark.parametrize(
+        ("provider", "context_length"),
+        [("openrouter", 64000), ("lmstudio", 32000)],
+    )
+    def test_put_allows_runtime_supported_context_lengths(
+        self, provider, context_length
+    ):
+        """The runtime minimum and LM Studio exception remain aligned."""
+        from fastapi.testclient import TestClient
+        from hermes_cli.config import load_config, save_config
+        from hermes_cli.web_server import app, _SESSION_HEADER_NAME, _SESSION_TOKEN
+
+        save_config({
+            "model": {
+                "default": "local-model",
+                "provider": provider,
+            }
+        })
+        client = TestClient(app)
+        client.headers[_SESSION_HEADER_NAME] = _SESSION_TOKEN
+
+        response = client.put(
+            "/api/config",
+            json={"config": {"model_context_length": context_length}},
+        )
+
+        assert response.status_code == 200
+        assert load_config()["model"]["context_length"] == context_length
+
 
 class TestDenormalizeProviderSwitch:
     """The flat Config-page Model field carries no provider info. When the
